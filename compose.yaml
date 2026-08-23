@@ -1,0 +1,26 @@
+services:
+  app:
+    build:
+      context: .
+    container_name: obsidian-rag-streamlit
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8590:8501"
+    environment:
+      MISTRAL_API_KEY: "${MISTRAL_API_KEY:?MISTRAL_API_KEY doit être définie}"
+      MISTRAL_CHAT_MODEL: "${MISTRAL_CHAT_MODEL:-mistral-large-latest}"
+      MISTRAL_EMBED_MODEL: "${MISTRAL_EMBED_MODEL:-mistral-embed}"
+      RAG_TOP_K: "${RAG_TOP_K:-6}"
+      OBSIDIAN_VAULT_PATH: /vault
+      RAG_INDEX_PATH: /data/index.sqlite3
+    volumes:
+      - type: bind
+        source: /Users/nicolasbour/Desktop/Nico_2.0
+        target: /vault
+        read_only: true
+      - type: volume
+        source: rag-index
+        target: /data
+
+volumes:
+  rag-index:

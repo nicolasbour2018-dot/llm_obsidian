@@ -1,0 +1,2 @@
+/opt/obsidian-rag
+streamlit>=1.40,<2
