@@ -13,11 +13,15 @@ from .settings import Settings
 
 
 class _JSONArgumentParser(argparse.ArgumentParser):
+    """Convertit les erreurs argparse en erreurs sérialisables par la CLI."""
+
     def error(self, message: str) -> None:
         raise RAGError("cli_usage_error", f"Arguments invalides : {message}", exit_code=2)
 
 
 def _parser() -> argparse.ArgumentParser:
+    """Construit les trois commandes publiques et leurs arguments."""
+
     parser = _JSONArgumentParser(prog="obsidian-rag")
     subparsers = parser.add_subparsers(
         dest="command", required=True, parser_class=_JSONArgumentParser
@@ -31,6 +35,8 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _write_json(stream: TextIO, payload: Any, pretty: bool) -> None:
+    """Écrit un objet JSON complet puis force son envoi vers le flux."""
+
     if pretty:
         json.dump(payload, stream, ensure_ascii=False, indent=2)
     else:
@@ -40,6 +46,8 @@ def _write_json(stream: TextIO, payload: Any, pretty: bool) -> None:
 
 
 def _chat(rag: ObsidianRAG, pretty: bool, stdin: TextIO, stdout: TextIO, stderr: TextIO) -> None:
+    """Anime une session interactive en gardant au plus six échanges en mémoire."""
+
     history: list[tuple[str, str]] = []
     turn = 0
     print("Chat prêt. /reset vide la mémoire, /quit ferme la session.", file=stderr)
@@ -81,7 +89,11 @@ def run(
     settings: Settings | None = None,
     rag_factory: Any = ObsidianRAG,
 ) -> int:
+    """Exécute la commande demandée et retourne un code de sortie prévisible."""
+
     args_list = list(argv if argv is not None else sys.argv[1:])
+    # `--pretty` est accepté à toute position, contrairement aux options argparse
+    # normalement rattachées à un niveau précis de sous-commande.
     pretty = False
     while "--pretty" in args_list:
         pretty = True
@@ -119,6 +131,8 @@ def run(
 
 
 def main() -> None:
+    """Point d'entrée installé par le paquet Python."""
+
     raise SystemExit(run())
 
 

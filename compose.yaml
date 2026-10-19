@@ -5,19 +5,39 @@ services:
     container_name: obsidian-rag-streamlit
     restart: unless-stopped
     ports:
+      # L'interface reste accessible uniquement depuis la machine hôte.
       - "127.0.0.1:8590:8501"
+    # Permet au conteneur de joindre le pont Apple Notes qui tourne sur le Mac.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       MISTRAL_API_KEY: "${MISTRAL_API_KEY:?MISTRAL_API_KEY doit être définie}"
-      MISTRAL_CHAT_MODEL: "${MISTRAL_CHAT_MODEL:-mistral-large-latest}"
+      MISTRAL_CHAT_MODEL: "${MISTRAL_CHAT_MODEL:-mistral-small-latest}"
+      # Chat : Mistral, avec repli automatique sur OpenAI si une clé est fournie.
+      CHAT_PROVIDER: "${CHAT_PROVIDER:-mistral}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_CHAT_MODEL: "${OPENAI_CHAT_MODEL:-gpt-5-mini}"
       MISTRAL_EMBED_MODEL: "${MISTRAL_EMBED_MODEL:-mistral-embed}"
       RAG_TOP_K: "${RAG_TOP_K:-6}"
+      # Chemin du coffre DANS le conteneur ; le chemin sur le Mac sert aux volumes.
       OBSIDIAN_VAULT_PATH: /vault
       RAG_INDEX_PATH: /data/index.sqlite3
+      RAG_EXCLUDE_DIRS: "${RAG_EXCLUDE_DIRS:-0 Second Cerveau/Conversations,Recently Deleted}"
+      BRAIN_DIR: "/vault/0 Second Cerveau"
+      OBSIDIAN_VAULT_NAME: "${OBSIDIAN_VAULT_NAME:-Nico_2.0}"
+      APPLE_NOTES_BRIDGE_URL: "http://host.docker.internal:8591"
+      APPLE_NOTES_BRIDGE_TOKEN: "${APPLE_NOTES_BRIDGE_TOKEN:-}"
     volumes:
+      # Le coffre est une source en lecture seule ; seul l'index est persistant.
+      # L'interpolation lit OBSIDIAN_VAULT_PATH depuis le .env/shell de l'hôte.
       - type: bind
-        source: /Users/nicolasbour/Desktop/Nico_2.0
+        source: "${OBSIDIAN_VAULT_PATH:?OBSIDIAN_VAULT_PATH doit être définie}"
         target: /vault
         read_only: true
+      # Seul dossier modifiable par l'IA : mémoire et conversations enregistrées.
+      - type: bind
+        source: "${OBSIDIAN_VAULT_PATH}/0 Second Cerveau"
+        target: "/vault/0 Second Cerveau"
       - type: volume
         source: rag-index
         target: /data

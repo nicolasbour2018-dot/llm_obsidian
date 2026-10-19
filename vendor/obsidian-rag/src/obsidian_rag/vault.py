@@ -6,19 +6,22 @@ import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 import yaml
 
 
 MAX_CHARS = 3_500
 OVERLAP_CHARS = 350
+# La version change dès que le découpage évolue pour déclencher un réindexage.
 CHUNK_FORMAT_VERSION = "headings-paragraphs-v1:max3500:overlap350"
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 
 
 @dataclass(frozen=True, slots=True)
 class Note:
+    """Représentation normalisée d'une note Markdown et de ses métadonnées."""
+
     path: str
     absolute_path: Path
     fingerprint: str
@@ -30,6 +33,8 @@ class Note:
 
 @dataclass(frozen=True, slots=True)
 class Chunk:
+    """Segment indexable d'une note, ordonné et identifié par son contenu."""
+
     position: int
     heading: str
     text: str
@@ -37,6 +42,8 @@ class Chunk:
 
 
 def _string_list(value: Any) -> tuple[str, ...]:
+    """Normalise les formes YAML possibles en tuple de chaînes non vides."""
+
     if value is None:
         return ()
     if isinstance(value, str):
@@ -50,6 +57,8 @@ def _string_list(value: Any) -> tuple[str, ...]:
 
 
 def parse_note(path: Path, vault_path: Path) -> Note:
+    """Lit une note et extrait sans risque son frontmatter et son titre."""
+
     raw = path.read_text(encoding="utf-8", errors="replace")
     body = raw
     metadata: dict[str, Any] = {}
@@ -66,6 +75,7 @@ def parse_note(path: Path, vault_path: Path) -> Note:
                 # Un frontmatter invalide reste du contenu consultable.
                 pass
 
+    # Priorité au titre explicite, puis au premier H1, puis au nom du fichier.
     first_h1 = next(
         (
             match.group(2).strip()
@@ -87,14 +97,26 @@ def parse_note(path: Path, vault_path: Path) -> Note:
     )
 
 
-def iter_notes(vault_path: Path) -> Iterable[Note]:
-    """Parcourt les `.md` en ignorant tout dossier caché."""
+def is_excluded(relative_path: str, exclude: Sequence[str]) -> bool:
+    """Indique si un chemin relatif (posix) est égal à, ou sous, un préfixe exclu."""
+
+    for prefix in exclude:
+        prefix = prefix.strip().strip("/")
+        if prefix and (relative_path == prefix or relative_path.startswith(prefix + "/")):
+            return True
+    return False
+
+
+def iter_notes(vault_path: Path, exclude: Sequence[str] = ()) -> Iterable[Note]:
+    """Parcourt les `.md` visibles et non exclus dans un ordre stable entre plateformes."""
+
     paths = sorted(
         (
             path
             for path in vault_path.rglob("*.md")
             if path.is_file()
             and not any(part.startswith(".") for part in path.relative_to(vault_path).parts)
+            and not is_excluded(path.relative_to(vault_path).as_posix(), exclude)
         ),
         key=lambda item: item.relative_to(vault_path).as_posix().casefold(),
     )
@@ -103,12 +125,16 @@ def iter_notes(vault_path: Path) -> Iterable[Note]:
 
 
 def _sections(body: str) -> list[tuple[str, str]]:
+    """Sépare le corps selon les titres en conservant leur chemin hiérarchique."""
+
     headings: list[str] = []
     result: list[tuple[str, str]] = []
     buffer: list[str] = []
     current_heading = ""
 
     def flush() -> None:
+        """Ajoute la section courante lorsqu'elle contient du texte."""
+
         text = "\n".join(buffer).strip()
         if text:
             result.append((current_heading, text))
@@ -130,6 +156,7 @@ def _sections(body: str) -> list[tuple[str, str]]:
 
 def _split_text(text: str, limit: int = MAX_CHARS, overlap: int = OVERLAP_CHARS) -> list[str]:
     """Découpe à une frontière de paragraphe si possible, avec recouvrement."""
+
     text = text.strip()
     if not text:
         return []
@@ -161,6 +188,8 @@ def _split_text(text: str, limit: int = MAX_CHARS, overlap: int = OVERLAP_CHARS)
 
 
 def chunk_note(note: Note) -> list[Chunk]:
+    """Transforme une note en chunks enrichis de leur contexte documentaire."""
+
     chunks: list[Chunk] = []
     position = 0
     for heading, section_text in _sections(note.body):
@@ -172,6 +201,7 @@ def chunk_note(note: Note) -> list[Chunk]:
         if heading:
             prefix_parts.append("Section: " + heading)
         prefix = "\n".join(prefix_parts) + "\n\n"
+        # Le préfixe compte dans la limite envoyée au modèle d'embedding.
         available = MAX_CHARS - len(prefix)
         if available < 200:
             prefix = f"Titre: {note.title[:200]}\n\n"

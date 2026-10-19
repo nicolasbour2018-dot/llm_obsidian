@@ -11,24 +11,34 @@ from .errors import APIError
 
 @dataclass(slots=True)
 class EmbeddingResponse:
+    """Normalise les vecteurs et leur consommation de tokens."""
+
     vectors: list[list[float]]
     tokens: int = 0
 
 
 @dataclass(slots=True)
 class ChatResponse:
+    """Normalise le texte généré et sa consommation de tokens."""
+
     text: str
     input_tokens: int = 0
     output_tokens: int = 0
+    # Fournisseur/modèle ayant réellement répondu (utile avec le repli OpenAI).
+    model: str = ""
 
 
 def _attr(value: Any, name: str, default: Any = None) -> Any:
+    """Lit uniformément un champ sur un objet SDK ou un dictionnaire de test."""
+
     if isinstance(value, dict):
         return value.get(name, default)
     return getattr(value, name, default)
 
 
 def _status_code(exc: BaseException) -> int | None:
+    """Extrait un statut HTTP directement ou depuis la réponse de l'exception."""
+
     for owner in (exc, getattr(exc, "response", None)):
         if owner is None:
             continue
@@ -39,6 +49,8 @@ def _status_code(exc: BaseException) -> int | None:
 
 
 def _retryable(exc: BaseException) -> bool:
+    """Identifie les échecs temporaires qui justifient une nouvelle tentative."""
+
     status = _status_code(exc)
     if status is not None:
         return status in {408, 429} or 500 <= status <= 599
@@ -55,6 +67,8 @@ class MistralGateway:
         client: Any | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
+        """Crée le client réel, sauf si un double de test est fourni."""
+
         if client is None:
             try:
                 # Depuis mistralai 2.9.4, l'import documenté passe par
@@ -73,14 +87,24 @@ class MistralGateway:
         self._sleep = sleep
 
     def _call(self, operation: Callable[[], Any]) -> Any:
+        """Applique les retries puis traduit toute erreur en APIError sûre."""
+
         for attempt in range(3):
             try:
                 return operation()
             except Exception as exc:  # Le SDK expose plusieurs familles d'erreurs.
                 status = _status_code(exc)
                 if _retryable(exc) and attempt < 2:
+                    # Backoff exponentiel court : 0,5 s puis 1 s.
                     self._sleep(0.5 * (2**attempt))
                     continue
+                # Un 403 peut aussi signifier que le modèle n'est pas inclus
+                # dans l'abonnement : la clé est alors valide.
+                if status == 403 and "tier_not_allowed" in str(exc):
+                    raise APIError(
+                        "model_not_allowed",
+                        "Ce modèle n'est pas inclus dans ton abonnement Mistral : change MISTRAL_CHAT_MODEL dans .env.",
+                    ) from exc
                 if status in {401, 403}:
                     raise APIError("authentication_error", "Authentification Mistral refusée.") from exc
                 if status == 402:
@@ -97,6 +121,8 @@ class MistralGateway:
         raise AssertionError("unreachable")
 
     def embed(self, texts: Sequence[str], model: str) -> EmbeddingResponse:
+        """Calcule un vecteur non vide pour chaque texte fourni."""
+
         response = self._call(
             lambda: self.client.embeddings.create(model=model, inputs=list(texts))
         )
@@ -109,6 +135,8 @@ class MistralGateway:
         return EmbeddingResponse(vectors=vectors, tokens=tokens)
 
     def chat(self, messages: list[dict[str, str]], model: str) -> ChatResponse:
+        """Génère une réponse textuelle non vide à partir des messages."""
+
         response = self._call(
             lambda: self.client.chat.complete(model=model, messages=messages)
         )
@@ -116,6 +144,7 @@ class MistralGateway:
         if not choices:
             raise APIError("invalid_api_response", "Mistral n'a renvoyé aucune réponse.")
         content = _attr(_attr(choices[0], "message"), "content", "")
+        # Le SDK peut représenter une réponse multimodale comme une liste de blocs.
         if isinstance(content, list):
             content = "".join(str(_attr(part, "text", "")) for part in content)
         text = str(content or "").strip()
@@ -126,9 +155,12 @@ class MistralGateway:
             text=text,
             input_tokens=int(_attr(usage, "prompt_tokens", 0) or 0),
             output_tokens=int(_attr(usage, "completion_tokens", 0) or 0),
+            model=f"mistral/{model}",
         )
 
     def close(self) -> None:
+        """Libère le client lorsque sa version expose une méthode de fermeture."""
+
         close = getattr(self.client, "close", None)
         if callable(close):
             close()

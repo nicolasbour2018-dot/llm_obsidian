@@ -14,11 +14,14 @@ class RAGError(Exception):
 
 
 class ConfigurationError(RAGError):
+    """Signale une configuration absente ou incohérente."""
+
     def __init__(self, message: str) -> None:
         super().__init__("configuration_error", message, exit_code=2)
 
 
 class APIError(RAGError):
+    """Traduit un échec du fournisseur Mistral en erreur publique stable."""
+
     def __init__(self, code: str, message: str) -> None:
         super().__init__(code, message, exit_code=3)
-
